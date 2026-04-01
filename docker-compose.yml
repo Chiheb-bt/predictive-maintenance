@@ -1,0 +1,32 @@
+services:
+  api-dev:
+    profiles: [dev]
+    build: .
+    ports: ["8000:8000"]
+    volumes:
+      - ./src:/app/src
+      - ./model.pkl:/app/model.pkl
+      - ./artifacts:/app/artifacts
+    environment:
+      PORT: "8000"
+      MODEL_PATH: /app/model.pkl
+      ALLOWED_ORIGINS: "http://localhost:3000"
+      # API_KEY: "your-dev-key"   # Uncomment to enable auth in dev
+    command: python run.py --reload
+
+  api-prod:
+    profiles: [prod]
+    build: .
+    ports: ["8000:8000"]
+    restart: unless-stopped
+    environment:
+      PORT: "8000"
+      MODEL_PATH: /app/model.pkl
+      ALLOWED_ORIGINS: "https://your-domain.com"
+      API_KEY: "${API_KEY}"        # Set this in your .env file or CI secrets
+    command: python run.py --workers 2
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5

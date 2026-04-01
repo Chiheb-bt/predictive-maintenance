@@ -1,0 +1,84 @@
+[build-system]
+requires      = ["setuptools>=72", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name            = "predictive-maintenance"
+version         = "2.2.0"
+description     = "Production ML API that predicts industrial machine failures from real-time sensor readings."
+readme          = "README.md"
+license         = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors         = [{ name = "Chiheb Ben Taghaline", email = "bchiheb598@gmail.com" }]
+
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "pydantic>=2.7.0",
+    "scikit-learn>=1.4.0",
+    "pandas>=2.2.0",
+    "numpy>=1.26.0",
+    "joblib>=1.4.0",
+    "gradio>=4.31.0",
+    "httpx>=0.27.0",
+    "prometheus-client>=0.20.0",
+    "prometheus-fastapi-instrumentator>=7.0.0",
+    "structlog>=24.1.0",
+]
+
+[project.optional-dependencies]
+advanced = [
+    "xgboost>=2.0.0",
+    "optuna>=3.6.0",
+    "mlflow>=2.13.0",
+]
+dev = [
+    "ruff",
+    "mypy",
+    "pre-commit",
+    "pytest",
+    "pytest-cov",
+    "pandas-stubs",
+    "types-requests",
+]
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths  = ["tests"]
+pythonpath = ["."]
+addopts    = "--tb=short -q"
+
+# ---------------------------------------------------------------------------
+# coverage
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["src"]
+omit   = ["src/models/train_advanced.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+
+# ---------------------------------------------------------------------------
+# ruff
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length    = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S"]
+ignore = ["E501", "S101"]   # S101: allow assert in tests
+
+# ---------------------------------------------------------------------------
+# mypy  — strict mode for verified type safety
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version            = "3.11"
+strict                    = true
+warn_return_any           = true
+warn_unused_configs       = true
+ignore_missing_imports    = true
+exclude                   = ["src/models/train_advanced\\.py", "tests/"]

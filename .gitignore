@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+*.so
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# ML artefacts — model.pkl is too large for Git.
+# Attach it to a GitHub Release or host it on Hugging Face Hub.
+model.pkl
+mlruns/
+mlartifacts/
+
+# CI-generated data (real dataset goes in Data/ but is not committed)
+Data/*.csv
+!Data/.gitkeep
+
+# Environment and secrets
+.env
+*.env
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Coverage and test output
+.coverage
+coverage.xml
+.pytest_cache/
+htmlcov/
+
+# Ruff cache
+.ruff_cache/
