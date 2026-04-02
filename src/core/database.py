@@ -12,7 +12,7 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Column, DateTime, Float, Integer, String, Text
+from sqlalchemy import Column, DateTime, Float, Integer, String, Text, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -86,3 +86,25 @@ async def log_prediction(
             )
             session.add(record)
         await session.commit()
+
+
+async def get_recent_audit_logs(limit: int = 10) -> list[dict[str, Any]]:
+    """Retrieve the latest prediction events for the dashboard."""
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(PredictionAudit).order_by(PredictionAudit.timestamp.desc()).limit(limit)
+        )
+        logs = result.scalars().all()
+        return [
+            {
+                "id":            log.id,
+                "request_id":    log.request_id,
+                "timestamp":     log.timestamp.isoformat(),
+                "machine_type":  log.machine_type,
+                "prediction":    log.prediction,
+                "probability":   round(log.probability, 4),
+                "risk_level":    log.risk_level,
+                "client_ip":     log.client_ip,
+            }
+            for log in logs
+        ]

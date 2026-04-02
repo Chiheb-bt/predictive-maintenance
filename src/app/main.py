@@ -17,13 +17,14 @@ import json
 import os
 import secrets
 import time
-from collections import Counter as _Counter
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import gradio as gr
+import plotly.graph_objects as go
 import structlog
 from fastapi import BackgroundTasks, Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,7 +32,7 @@ from prometheus_client import Counter as PrometheusCounter
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, Field, field_validator
 
-from src.core.database import log_prediction
+from src.core.database import get_recent_audit_logs, init_db, log_prediction
 from src.core.preprocessing import NUMERIC_FEATURES
 from src.serving.inference import (
     get_load_error,
@@ -519,154 +520,186 @@ def check_drift(payload: DriftRequest) -> DriftResponse:
 
 
 # ---------------------------------------------------------------------------
-# Gradio UI
+# Gradio "Command Center" — The Ultimate Expert Dashboard
 # ---------------------------------------------------------------------------
-_CSS = """
-:root {
-    --risk-low-bg:       #f0fdf4;  --risk-low-border:   #86efac;  --risk-low-text:     #166534;
-    --risk-med-bg:       #fffbeb;  --risk-med-border:   #fcd34d;  --risk-med-text:     #92400e;
-    --risk-high-bg:      #fff7ed;  --risk-high-border:  #fb923c;  --risk-high-text:    #9a3412;
-    --risk-crit-bg:      #fff1f2;  --risk-crit-border:  #fda4af;  --risk-crit-text:    #9f1239;
-    --risk-idle-bg:      #f8fafc;  --risk-idle-border:  #e2e8f0;  --risk-idle-text:    #94a3b8;
-    --bar-track:         #e2e8f0;
-    --accent:            #6366f1;
-}
-.gradio-container { font-family: 'Inter', 'Segoe UI', sans-serif !important; max-width: 1100px !important; margin: 0 auto !important; }
-.risk-card { border-radius: 12px; padding: 1.2rem 1.5rem; font-size: 1.2rem; font-weight: 700; margin-bottom: 1rem; }
-.risk-low      { background: var(--risk-low-bg);  border: 2px solid var(--risk-low-border);  color: var(--risk-low-text);  }
-.risk-medium   { background: var(--risk-med-bg);  border: 2px solid var(--risk-med-border);  color: var(--risk-med-text);  }
-.risk-high     { background: var(--risk-high-bg); border: 2px solid var(--risk-high-border); color: var(--risk-high-text); }
-.risk-critical { background: var(--risk-crit-bg); border: 2px solid var(--risk-crit-border); color: var(--risk-crit-text); }
-.risk-idle     { background: var(--risk-idle-bg); border: 2px solid var(--risk-idle-border); color: var(--risk-idle-text); }
-.risk-meta     { margin-top: 8px; font-size: .85rem; font-weight: 400; opacity: .85; }
-.req-id        { margin-top: 6px; font-size: .75rem; font-weight: 400; opacity: .6; font-family: monospace; }
-.bar-track { background: var(--bar-track); border-radius: 99px; height: 10px; overflow: hidden; margin: 6px 0 14px; }
-.bar-fill  { height: 100%; border-radius: 99px; transition: width .4s ease; }
-.factors-table    { width: 100%; border-collapse: collapse; font-size: .9rem; margin-top: .5rem; }
-.factors-table th { text-align: left; color: #64748b; font-weight: 600; padding: 4px 8px; border-bottom: 1px solid #e2e8f0; }
-.factors-table td { padding: 6px 8px; border-bottom: 1px solid #f1f5f9; }
-.imp-bar-wrap { background: #f1f5f9; border-radius: 99px; height: 8px; width: 120px; overflow: hidden; display: inline-block; vertical-align: middle; }
-.imp-bar-fill { height: 100%; background: var(--accent); border-radius: 99px; }
-.rec-list          { list-style: none; padding: 0; margin: .5rem 0 0; }
-.rec-list li       { padding: 5px 0 5px 1.4rem; position: relative; font-size: .9rem; line-height: 1.5; border-bottom: 1px solid #f1f5f9; }
-.rec-list li::before { content: "->"; position: absolute; left: 0; color: var(--accent); font-weight: 700; }
-"""
 
-_RISK_META: dict[str, tuple[str, str, str]] = {
-    "LOW":      ("risk-low",      "Low Risk",      "#22c55e"),
-    "MEDIUM":   ("risk-medium",   "Medium Risk",   "#f59e0b"),
-    "HIGH":     ("risk-high",     "High Risk",     "#f97316"),
-    "CRITICAL": ("risk-critical", "Critical Risk", "#ef4444"),
-}
+def _create_risk_gauge(probability: float, risk_level: str) -> go.Figure:
+    """Create a high-fidelity industrial risk gauge."""
+    colors = {"LOW": "#10b981", "MEDIUM": "#f59e0b", "HIGH": "#ef4444", "CRITICAL": "#7f1d1d"}
+    color = colors.get(risk_level, "#3b82f6")
+
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=probability * 100,
+        domain={"x": [0, 1], "y": [0, 1]},
+        title={"text": "FAILURE PROBABILITY", "font": {"size": 20, "color": "#1f2937"}},
+        gauge={
+            "axis": {"range": [0, 100], "tickwidth": 1, "tickcolor": "#4b5563"},
+            "bar": {"color": color},
+            "bgcolor": "white",
+            "borderwidth": 2,
+            "bordercolor": "#e5e7eb",
+            "steps": [
+                {"range": [0, 30], "color": "rgba(16, 185, 129, 0.1)"},
+                {"range": [30, 70], "color": "rgba(245, 158, 11, 0.1)"},
+                {"range": [70, 100], "color": "rgba(239, 68, 68, 0.1)"},
+            ],
+            "threshold": {
+                "line": {"color": "red", "width": 4},
+                "thickness": 0.75,
+                "value": 90,
+            }
+        }
+    ))
+    fig.update_layout(height=280, margin=dict(l=20, r=20, t=50, b=20), paper_bgcolor="rgba(0,0,0,0)")
+    return fig
 
 
-def _result_html(result: dict) -> str:  # type: ignore[type-arg]
-    prob       = result["probability"]
-    conf       = result["confidence"]
-    risk       = result["risk_level"]
-    status     = result["status"]
-    recs       = result["recommendations"]
-    factors    = result["top_factors"]
-    request_id = result["request_id"]
+def _create_factor_chart(factors: list[dict[str, Any]]) -> go.Figure:
+    """Create a horizontal bar chart showing sensor influence."""
+    names = [f["feature"] for f in reversed(factors)]
+    values = [f["importance"] * 100 for f in reversed(factors)]
 
-    cls, label, colour = _RISK_META.get(risk, ("risk-idle", risk, "#94a3b8"))
-    bar_pct  = int(prob * 100)
-    conf_pct = int(conf * 100)
-
-    factors_rows = "".join(
-        f"""<tr>
-              <td>#{f["rank"]}</td>
-              <td>{f["feature"]}</td>
-              <td>
-                <span class="imp-bar-wrap">
-                  <span class="imp-bar-fill" style="width:{int(f['importance']*100)}%"></span>
-                </span>
-                &nbsp;{f['importance']:.2%}
-              </td>
-            </tr>"""
-        for f in factors
+    fig = go.Figure(go.Bar(
+        x=values,
+        y=names,
+        orientation="h",
+        marker=dict(color="#3b82f6", line=dict(color="#2563eb", width=1))
+    ))
+    fig.update_layout(
+        title={"text": "KEY SENSOR INFLUENCE", "font": {"size": 16}},
+        xaxis_title="Influence Score (%)",
+        height=280,
+        margin=dict(l=20, r=20, t=50, b=20),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)"
     )
-    rec_items = "".join(f"<li>{r}</li>" for r in recs)
-
-    return f"""
-<div class="risk-card {cls}">
-  {label} — {status}
-  <div class="risk-meta">
-    Failure probability: <strong>{prob:.1%}</strong> &nbsp;|&nbsp;
-    Model certainty: <strong>{conf_pct}%</strong>
-  </div>
-  <div class="req-id">Request ID: {request_id}</div>
-</div>
-
-<p><strong>Failure probability</strong></p>
-<div class="bar-track">
-  <div class="bar-fill" style="width:{bar_pct}%;background:{colour}"></div>
-</div>
-
-<p><strong>Contributing factors</strong></p>
-<table class="factors-table">
-  <thead><tr><th>Rank</th><th>Sensor</th><th>Influence</th></tr></thead>
-  <tbody>{factors_rows}</tbody>
-</table>
-
-<p style="margin-top:1rem"><strong>Recommended actions</strong></p>
-<ul class="rec-list">{rec_items}</ul>
-"""
+    return fig
 
 
-def _gradio_predict(
-    machine_type: str,
-    air_temp: float,
-    process_temp: float,
+async def _get_history_table() -> list[list[Any]]:
+    """Fetch recent predictions from the audit trail."""
+    try:
+        logs = await get_recent_audit_logs(limit=8)
+        return [
+            [l["timestamp"][:19], l["machine_type"], l["risk_level"], l["probability"], l["client_ip"] or "-"]
+            for l in logs
+        ]
+    except Exception:
+        return []
+
+
+async def _ui_predict_handler(
+    m_type: str,
+    air_t: float,
+    proc_t: float,
     rpm: int,
     torque: float,
     tool_wear: int,
-) -> str:
-    if not model_is_ready():
-        return f"<p style='color:red'>Model not loaded: {get_load_error()}</p>"
+) -> tuple[go.Figure | None, go.Figure | None, str, list[list[Any]]]:
+    """Bridge the UI to the inference engine with live audit logging."""
+    payload = {
+        "Type": m_type,
+        "Air_temperature": air_t,
+        "Process_temperature": proc_t,
+        "Rotational_speed": rpm,
+        "Torque": torque,
+        "Tool_wear": tool_wear,
+    }
+
     try:
-        result = predict({
-            "Type":                machine_type,
-            "Air_temperature":     air_temp,
-            "Process_temperature": process_temp,
-            "Rotational_speed":    rpm,
-            "Torque":              torque,
-            "Tool_wear":           tool_wear,
-        })
-        return _result_html(result)
-    except Exception as exc:
-        return f"<p style='color:red'>Error: {exc}</p>"
+        # We don't have BackgroundTasks/Request here in Gradio, 
+        # so we call predict directly.
+        res = predict(payload)
+        
+        # Log to DB manually for UI predictions
+        try:
+            await log_prediction(
+                request_id=res["request_id"],
+                machine_type=m_type,
+                input_data=payload,
+                prediction=res["prediction"],
+                probability=res["probability"],
+                risk_level=res["risk_level"],
+                client_ip="Grad-UI-User",
+                user_agent="Gradio Browser"
+            )
+        except Exception as e:
+             log.error("ui_db_log_failed", error=str(e))
+
+        gauge = _create_risk_gauge(res["probability"], res["risk_level"])
+        factors = _create_factor_chart(res["top_factors"])
+        history = await _get_history_table()
+        
+        recs = "\n".join([f"• {r}" for r in res["recommendations"]])
+        
+        return gauge, factors, recs, history
+
+    except Exception as e:
+        return None, None, f"Error: {e}", []
 
 
-def _build_gradio_app() -> gr.Blocks:
-    with gr.Blocks(css=_CSS, title="Predictive Maintenance") as demo:
-        gr.Markdown("## Predictive Maintenance — Interactive Demo")
-        gr.Markdown(
-            "Enter sensor readings and click **Predict** to get a risk assessment. "
-            "Default values are typical operating conditions for a medium-grade machine."
-        )
+def _build_gradio_ui() -> gr.Blocks:
+    """The Ultimate Sentinel Command Center."""
+    custom_css = """
+    .gradio-container { background-color: #f9fafb; font-family: 'Inter', sans-serif; }
+    .risk-card { border: 1px solid #e5e7eb; border-radius: 12px; padding: 20px; background: white; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+    .header-center { text-align: center; margin-bottom: 2rem; }
+    .logo-font { font-size: 2.5rem; font-weight: 800; color: #111827; letter-spacing: -0.025em; }
+    """
+
+    with gr.Blocks(theme=gr.themes.Soft(), css=custom_css, title="Sentinel Command Center") as demo:
+        with gr.Div(elem_classes="header-center"):
+            gr.Markdown(
+                "<div class='logo-font'>SENTINEL <span style='color:#3b82f6'>v10.0</span></div>"
+                "<p style='color:#6b7280; font-size:1.1rem;'>Industrial Intelligence Command Center • Real-time Predictive Maintenance</p>"
+            )
+
         with gr.Row():
+            # LEFT: TELEMETRY CONTROL
             with gr.Column(scale=1):
-                machine_type = gr.Dropdown(["L", "M", "H"], value="M", label="Machine Type")
-                air_temp     = gr.Slider(200, 400, value=298.1, step=0.1, label="Air Temperature (K)")
-                process_temp = gr.Slider(200, 400, value=308.6, step=0.1, label="Process Temperature (K)")
-                rpm          = gr.Slider(0, 10000, value=1551,  step=1,   label="Rotational Speed (RPM)")
-                torque       = gr.Slider(0, 500,   value=42.8,  step=0.1, label="Torque (Nm)")
-                tool_wear    = gr.Slider(0, 500,   value=0,     step=1,   label="Tool Wear (min)")
-                btn          = gr.Button("Predict", variant="primary")
-            with gr.Column(scale=1):
-                output = gr.HTML(
-                    value="<div class='risk-card risk-idle'>Submit a reading to see the risk assessment.</div>"
+                gr.Markdown("### 🎛️ TELEMETRY CONTROL")
+                with gr.Div(elem_classes="risk-card"):
+                    m_type    = gr.Dropdown(choices=["L", "M", "H"], value="M", label="Machine Type")
+                    air_t     = gr.Slider(290, 310, 298, label="Air Temp [K]")
+                    proc_t    = gr.Slider(300, 320, 308, label="Process Temp [K]")
+                    rpm       = gr.Slider(1000, 3000, 1550, label="Rotational Speed [rpm]")
+                    torque    = gr.Slider(10, 80, 45, label="Torque [Nm]")
+                    wear      = gr.Slider(0, 250, 0, label="Tool Wear [min]")
+                    btn       = gr.Button("RUN INFERENCE", variant="primary")
+
+            # RIGHT: EXPERT INSIGHTS
+            with gr.Column(scale=2):
+                gr.Markdown("### 🧠 EXPERT INSIGHTS")
+                with gr.Row():
+                    gauge_out = gr.Plot(label="Risk Assessment")
+                    factors_out = gr.Plot(label="Signal Analysis")
+                
+                with gr.Div(elem_classes="risk-card"):
+                    recs_out = gr.Markdown("### 🛠️ RECOMMENDATIONS\n*Awaiting telemetry...*")
+
+        with gr.Row():
+            with gr.Column():
+                gr.Markdown("### 📜 LIVE AUDIT FEED")
+                history_out = gr.Dataframe(
+                    headers=["TIMESTAMP", "MACHINE", "RISK", "PROB", "CLIENT"],
+                    datatype=["str", "str", "str", "number", "str"],
+                    value=[],
+                    interactive=False
                 )
 
+        # Wire it up
         btn.click(
-            fn=_gradio_predict,
-            inputs=[machine_type, air_temp, process_temp, rpm, torque, tool_wear],
-            outputs=output,
+            fn=_ui_predict_handler,
+            inputs=[m_type, air_t, proc_t, rpm, torque, wear],
+            outputs=[gauge_out, factors_out, recs_out, history_out]
         )
+        
+        # Load initial history
+        demo.load(fn=_get_history_table, outputs=history_out)
 
     return demo
 
 
-_gradio_app = _build_gradio_app()
+_gradio_app = _build_gradio_ui()
 app = gr.mount_gradio_app(app, _gradio_app, path="/ui")
