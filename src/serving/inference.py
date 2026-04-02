@@ -15,14 +15,15 @@ Responsibilities:
 
 from __future__ import annotations
 
-import logging
 import os
 import uuid
 from pathlib import Path
+from typing import Any
 
 import joblib
 import numpy as np
 import pandas as pd
+import structlog
 
 from src.core.preprocessing import (
     CATEGORICAL_FEATURES,
@@ -39,7 +40,7 @@ from src.core.risk_engine import (
     top_factors,
 )
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 DEFAULT_THRESHOLD = float(os.getenv("MODEL_THRESHOLD", "0.5"))
 RAW_FEATURES = NUMERIC_FEATURES + CATEGORICAL_FEATURES
@@ -89,10 +90,10 @@ def load_model() -> None:
     try:
         _model_path = _find_model()
         _pipeline   = joblib.load(_model_path)
-        log.info("Pipeline loaded from %s", _model_path)
+        log.info("model_loaded", path=str(_model_path))
     except Exception as exc:
         _load_error = str(exc)
-        log.error("Failed to load model: %s", exc)
+        log.error("model_load_failed", error=str(exc))
 
 
 def model_is_ready() -> bool:
@@ -136,7 +137,7 @@ def _build_dataframe(data: dict) -> pd.DataFrame:  # type: ignore[type-arg]
     """
     norm  = {INPUT_ALIASES.get(k, k): v for k, v in data.items()}
     mtype = str(norm.get("Type", "")).strip().upper()
-    row   = {col: float(norm[col]) for col in NUMERIC_FEATURES}
+    row: dict[str, Any] = {col: float(norm[col]) for col in NUMERIC_FEATURES}
     row["Type"] = mtype
     return pd.DataFrame([row])[RAW_FEATURES]
 
@@ -148,8 +149,8 @@ def _extract_importances(pipeline: object) -> tuple[list[float], list[str]]:
     CalibratedClassifierCV with cv=5 wraps five base estimators. Averaging
     gives a more stable importance estimate than any single fold would.
     """
-    preprocessor  = pipeline.named_steps["preprocessor"]  # type: ignore[union-attr]
-    classifier    = pipeline.named_steps["classifier"]     # type: ignore[union-attr]
+    preprocessor  = pipeline.named_steps["preprocessor"]  # type: ignore
+    classifier    = pipeline.named_steps["classifier"]     # type: ignore
     feature_names = list(preprocessor.get_feature_names_out())
     importances   = np.mean([
         est.estimator.feature_importances_
@@ -218,7 +219,7 @@ def predict(data: dict, threshold: float = DEFAULT_THRESHOLD) -> dict:  # type: 
     _validate(data)
 
     df          = _build_dataframe(data)
-    probability = float(np.round(_pipeline.predict_proba(df)[0, 1], 4))  # type: ignore[union-attr]
+    probability = float(np.round(_pipeline.predict_proba(df)[0, 1], 4))  # type: ignore
     prediction  = int(probability >= threshold)
 
     # Confidence: how far the probability sits from the decision boundary,
@@ -242,8 +243,11 @@ def predict(data: dict, threshold: float = DEFAULT_THRESHOLD) -> dict:  # type: 
     request_id      = str(uuid.uuid4())
 
     log.info(
-        "request_id=%s prediction=%s probability=%.4f risk=%s",
-        request_id, status, probability, risk_level,
+        "inference_complete",
+        request_id=request_id,
+        status=status,
+        probability=probability,
+        risk=risk_level,
     )
 
     return {

@@ -13,7 +13,6 @@ import os
 import uuid
 from unittest.mock import patch
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -49,11 +48,11 @@ class TestValidate:
         }
         self._validate(canonical)
 
-    @pytest.mark.parametrize("mtype", ["L", "M", "H"])
+    @pytest.mark.parametrize("mtype", ["L", "M", "H", "l", "m", "h", " L "])
     def test_all_valid_machine_types(self, mtype):
         self._validate({**VALID_PAYLOAD, "Type": mtype})
 
-    @pytest.mark.parametrize("mtype", ["X", "l", "m", "h", "", "LL", "123"])
+    @pytest.mark.parametrize("mtype", ["X", "a", "b", "c", "", "LL", "123"])
     def test_invalid_machine_type_raises(self, mtype):
         with pytest.raises(ValueError, match="Type"):
             self._validate({**VALID_PAYLOAD, "Type": mtype})

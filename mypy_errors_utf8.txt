@@ -1,0 +1,2 @@
+﻿src\models\train.py:122: error: Missing type arguments for generic type "ndarray"  [type-arg]
+src\app\main.py:638: error: Unused "type: ignore" comment  [unused-ignore]

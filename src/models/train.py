@@ -24,12 +24,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 from pathlib import Path
+from typing import Any
 
 import joblib
+import mlflow
+import mlflow.sklearn
 import numpy as np
 import pandas as pd
+import structlog
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
@@ -50,8 +53,7 @@ from src.core.preprocessing import (
     build_preprocessor,
 )
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 TARGET_COLUMN = "Machine failure"
 
@@ -80,7 +82,7 @@ def load(path: str | Path) -> pd.DataFrame:
     if not p.exists():
         raise FileNotFoundError(f"Data file not found: {p}")
     df = pd.read_csv(p)
-    log.info("Loaded %d rows × %d columns", len(df), len(df.columns))
+    log.info("dataset_loaded", rows=len(df), cols=len(df.columns))
     return df
 
 
@@ -92,7 +94,7 @@ def prepare(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
     missing = df[RAW_FEATURES].isnull().sum()
     missing = missing[missing > 0]
     if not missing.empty:
-        log.warning("Missing values detected — imputing with column medians/mode:\n%s", missing.to_string())
+        log.warning("missing_values_detected", columns=missing.to_dict())
 
     # Impute numeric features with the training-set median.
     # Filling with 0 is physically wrong (0 Kelvin, 0 RPM are not plausible
@@ -118,14 +120,14 @@ def prepare(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
     return df[RAW_FEATURES], y
 
 
-def best_threshold(y_true: np.ndarray, proba: np.ndarray) -> float:
+def best_threshold(y_true: np.ndarray[Any, Any], proba: np.ndarray[Any, Any]) -> float:
     """Return the cut-off that maximises F1 on the precision-recall curve."""
     precision, recall, thresholds = precision_recall_curve(y_true, proba)
     f1 = 2 * precision * recall / (precision + recall + 1e-9)
     return float(thresholds[np.argmax(f1[:-1])])
 
 
-def extract_feature_importance(pipeline: Pipeline) -> list[dict]:
+def extract_feature_importance(pipeline: Pipeline) -> list[dict[str, Any]]:
     """Average importances across calibrated estimator folds."""
     preprocessor = pipeline.named_steps["preprocessor"]
     classifier   = pipeline.named_steps["classifier"]
@@ -138,7 +140,7 @@ def extract_feature_importance(pipeline: Pipeline) -> list[dict]:
 
     total = importances.sum() or 1.0
     ranked = sorted(
-        zip(feature_names, importances),
+        zip(feature_names, importances, strict=False),
         key=lambda x: x[1],
         reverse=True,
     )
@@ -157,7 +159,7 @@ def evaluate(
     y_val: pd.Series,
     X_test: pd.DataFrame,
     y_test: pd.Series,
-) -> dict:
+) -> dict[str, Any]:
     """
     Select threshold on validation set, report final metrics on test set.
 
@@ -166,7 +168,7 @@ def evaluate(
     the threshold to noise in that split.
     """
     val_proba  = pipeline.predict_proba(X_val)[:, 1]
-    threshold  = best_threshold(y_val.values, val_proba)
+    threshold  = best_threshold(y_val.to_numpy(), val_proba)
 
     test_proba = pipeline.predict_proba(X_test)[:, 1]
     y_pred     = (test_proba >= threshold).astype(int)
@@ -181,11 +183,15 @@ def evaluate(
     naive_f1 = round(f1_score(y_test, [0] * len(y_test), zero_division=0), 4)
 
     log.info(
-        "Test — F1: %.4f  Precision: %.4f  Recall: %.4f  AUC: %.4f  Threshold: %.4f",
-        f1, precision, recall, roc_auc, threshold,
+        "test_metrics",
+        f1=f1,
+        precision=precision,
+        recall=recall,
+        roc_auc=roc_auc,
+        threshold=threshold,
     )
-    log.info("Naive baseline F1 (always predict 0): %.4f", naive_f1)
-    log.info("\n%s", classification_report(y_test, y_pred, zero_division=0))
+    log.info("baseline_comparison", naive_f1=naive_f1)
+    log.info("classification_report", report=classification_report(y_test, y_pred, zero_division=0))
 
     return {
         "f1":                f1,
@@ -213,7 +219,7 @@ def _base_pipeline(n_estimators: int, max_depth: int, min_samples_split: int) ->
     ])
 
 
-def search_best_pipeline(X_train: pd.DataFrame, y_train: pd.Series) -> tuple[Pipeline, dict]:
+def search_best_pipeline(X_train: pd.DataFrame, y_train: pd.Series) -> tuple[Pipeline, dict[str, Any]]:
     """
     Stratified 3-fold grid search over key RandomForest hyperparameters.
     Returns the best fitted pipeline and the winning parameter set.
@@ -242,14 +248,14 @@ def search_best_pipeline(X_train: pd.DataFrame, y_train: pd.Series) -> tuple[Pip
         for k, v in search.best_params_.items()
     }
     log.info(
-        "Grid search complete — best CV F1: %.4f | params: %s",
-        search.best_score_,
-        best_params,
+        "grid_search_complete",
+        best_cv_f1=round(float(search.best_score_), 4),
+        best_params=best_params,
     )
     return search.best_estimator_, best_params
 
 
-def _compute_training_stats(X_train: pd.DataFrame) -> dict:
+def _compute_training_stats(X_train: pd.DataFrame) -> dict[str, Any]:
     """
     Compute per-feature distribution statistics from the training set.
 
@@ -272,11 +278,15 @@ def _compute_training_stats(X_train: pd.DataFrame) -> dict:
 
 
 def run(data_path: str, output_path: str, run_search: bool = True) -> None:
+    # Initialize MLflow tracking
+    mlflow.set_tracking_uri("file:./mlruns")
+    mlflow.set_experiment("Sentinel-Industrial-AI")
+
     df   = load(data_path)
     X, y = prepare(df)
 
-    failure_rate = y.mean()
-    log.info("Failure rate: %.1f%%", failure_rate * 100)
+    failure_rate = float(y.mean())
+    log.info("target_distribution", failure_rate=round(failure_rate, 4))
 
     # 60 / 20 / 20 split — stratified to preserve class balance in every split.
     X_train, X_tmp,  y_train, y_tmp  = train_test_split(
@@ -300,23 +310,40 @@ def run(data_path: str, output_path: str, run_search: bool = True) -> None:
     factors        = extract_feature_importance(pipeline)
     training_stats = _compute_training_stats(X_train)
 
-    out = Path(output_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(pipeline, out)
-    log.info("Pipeline saved → %s", out.resolve())
+    with mlflow.start_run():
+        # Log parameters
+        mlflow.log_params(best_params)
+        mlflow.log_param("model_type", "RandomForest-Calibrated")
+        mlflow.log_param("run_search", run_search)
 
-    Path("artifacts").mkdir(exist_ok=True)
-    meta = {
-        "model_type":         "RandomForest (calibrated, isotonic)",
-        "feature_columns":    NUMERIC_FEATURES + CATEGORICAL_FEATURES,
-        "best_params":        best_params,
-        "threshold":          metrics["threshold"],
-        "metrics":            metrics,
-        "feature_importance": factors,
-        "training_stats":     training_stats,
-    }
-    Path("artifacts/meta.json").write_text(json.dumps(meta, indent=2))
-    log.info("Metadata saved → artifacts/meta.json")
+        # Log metrics (mlflow.log_metrics expects float values)
+        mlflow.log_metrics({k: v for k, v in metrics.items() if isinstance(v, (int, float))})
+
+        # Save artifacts locally
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(pipeline, out)
+
+        Path("artifacts").mkdir(exist_ok=True)
+        meta = {
+            "model_type":         "RandomForest (calibrated, isotonic)",
+            "feature_columns":    NUMERIC_FEATURES + CATEGORICAL_FEATURES,
+            "best_params":        best_params,
+            "threshold":          metrics["threshold"],
+            "metrics":            metrics,
+            "feature_importance": factors,
+            "training_stats":     training_stats,
+        }
+        meta_path = Path("artifacts/meta.json")
+        meta_path.write_text(json.dumps(meta, indent=2))
+
+        # Log to MLflow
+        mlflow.log_artifact(str(meta_path))
+        mlflow.sklearn.log_model(pipeline, "model")
+
+        log.info("pipeline_saved", path=str(out.resolve()))
+        log.info("metadata_saved", path=str(meta_path))
+        log.info("mlflow_run_complete", experiment="Sentinel-Industrial-AI")
 
 
 if __name__ == "__main__":

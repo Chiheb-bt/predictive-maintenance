@@ -14,23 +14,24 @@ Endpoints:
 from __future__ import annotations
 
 import json
-import logging
 import os
 import secrets
 import time
 from collections import Counter as _Counter
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 import gradio as gr
-from fastapi import Body, Depends, FastAPI, Header, HTTPException
+import structlog
+from fastapi import BackgroundTasks, Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import Counter as PrometheusCounter
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, Field, field_validator
 
+from src.core.database import log_prediction
 from src.core.preprocessing import NUMERIC_FEATURES
 from src.serving.inference import (
     get_load_error,
@@ -41,7 +42,7 @@ from src.serving.inference import (
     predict_batch,
 )
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # CORS
@@ -76,6 +77,13 @@ async def _require_api_key(x_api_key: str = Header(default="")) -> None:
     """
     if _API_KEY and not secrets.compare_digest(x_api_key, _API_KEY):
         raise HTTPException(status_code=401, detail="Invalid or missing API key.")
+
+
+def _get_audit_meta(request: Request) -> tuple[str | None, str | None]:
+    """Extract client IP and User-Agent for the audit trail."""
+    ip = request.client.host if request.client else None
+    ua = request.headers.get("user-agent")
+    return ip, ua
 
 
 # ---------------------------------------------------------------------------
@@ -141,15 +149,16 @@ _TRAINING_STATS: dict = {}  # type: ignore[type-arg]
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):  # noqa: ARG001
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: ARG001
     global _TRAINING_STATS
     load_model()
     _TRAINING_STATS = _load_training_stats()
     _instrumentator.expose(app, endpoint="/metrics", include_in_schema=False)
     log.info(
-        "Startup complete — model_path=%s  model_ready=%s  metrics=enabled",
-        get_model_path(),
-        model_is_ready(),
+        "app_startup_complete",
+        model_path=str(get_model_path()),
+        model_ready=model_is_ready(),
+        metrics_enabled=True,
     )
     yield
     # Teardown: close any resources here (thread pools, DB connections, etc.)
@@ -178,8 +187,8 @@ app = FastAPI(
         "- Sensor-aware maintenance recommendations\n"
         "- Top 3 contributing sensor factors\n"
     ),
-    version="2.2.0",
-    contact={"name": "ML Engineering"},
+    version="10.0.0",
+    contact={"name": "Sentinel Engineering"},
     license_info={"name": "MIT", "url": "https://opensource.org/licenses/MIT"},
     lifespan=lifespan,
 )
@@ -251,12 +260,12 @@ class PredictionResponse(BaseModel):
 class BatchItemResult(BaseModel):
     """Result for a single row in a batch request. success=False rows include only error."""
     success:         bool            = Field(..., description="Whether inference succeeded for this row")
-    error:           Optional[str]   = Field(None, description="Validation error message, if success=False")
-    request_id:      Optional[str]   = Field(None, description="UUID v4 for tracing")
-    prediction:      Optional[int]   = Field(None, description="0 = no failure | 1 = failure predicted")
-    probability:     Optional[float] = Field(None, description="Failure probability (0.00–1.00)")
-    risk_level:      Optional[str]   = Field(None, description="LOW | MEDIUM | HIGH | CRITICAL")
-    status:          Optional[str]   = Field(None, description="Plain-English verdict")
+    error:           str | None   = Field(None, description="Validation error message, if success=False")
+    request_id:      str | None   = Field(None, description="UUID v4 for tracing")
+    prediction:      int | None   = Field(None, description="0 = no failure | 1 = failure predicted")
+    probability:     float | None = Field(None, description="Failure probability (0.00–1.00)")
+    risk_level:      str | None   = Field(None, description="LOW | MEDIUM | HIGH | CRITICAL")
+    status:          str | None   = Field(None, description="Plain-English verdict")
 
 
 class BatchPredictionResponse(BaseModel):
@@ -304,11 +313,12 @@ def health() -> dict:  # type: ignore[type-arg]
     Suitable as a Kubernetes readiness probe — no auth required.
     """
     ready = model_is_ready()
+    model_path = get_model_path()
     return {
         "status":       "ok" if ready else "degraded",
         "service":      "Predictive Maintenance API",
         "version":      "2.2.0",
-        "model":        str(get_model_path().name) if get_model_path() else None,
+        "model":        str(model_path.name) if model_path else None,
         "model_loaded": ready,
         "model_error":  get_load_error(),
         "uptime_s":     round(time.time() - _START_TIME, 1),
@@ -323,7 +333,11 @@ def health() -> dict:  # type: ignore[type-arg]
     summary="Predict machine failure",
     dependencies=[Depends(_require_api_key)],
 )
-def predict_failure(data: SensorInput) -> dict:  # type: ignore[type-arg]
+def predict_failure(
+    data: SensorInput,
+    request: Request,
+    background_tasks: BackgroundTasks,
+) -> dict:  # type: ignore[type-arg]
     """
     Accept sensor readings and return a full structured risk assessment.
 
@@ -341,11 +355,28 @@ def predict_failure(data: SensorInput) -> dict:  # type: ignore[type-arg]
     try:
         result = predict(data.model_dump())
     except ValueError as exc:
+        log.warning("inference_validation_failed", error=str(exc))
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
+        log.error("inference_server_error", error=str(exc))
         raise HTTPException(status_code=500, detail=f"Inference error: {exc}") from exc
 
     _PREDICTION_COUNTER.labels(risk_level=result["risk_level"]).inc()
+
+    # Log to Audit Trail (Async)
+    client_ip, user_agent = _get_audit_meta(request)
+    background_tasks.add_task(
+        log_prediction,
+        request_id=result["request_id"],
+        machine_type=data.Type,
+        input_data=data.model_dump(),
+        prediction=result["prediction"],
+        probability=result["probability"],
+        risk_level=result["risk_level"],
+        client_ip=client_ip,
+        user_agent=user_agent,
+    )
+
     return result
 
 
@@ -429,6 +460,7 @@ def check_drift(payload: DriftRequest) -> DriftResponse:
         )
 
     import pandas as pd  # noqa: PLC0415
+
     from src.core.preprocessing import INPUT_ALIASES  # noqa: PLC0415
 
     readings_dicts = [r.model_dump() for r in payload.readings]
@@ -481,7 +513,7 @@ def check_drift(payload: DriftRequest) -> DriftResponse:
         n_samples=len(payload.readings),
         overall_status=overall,
         features=feature_results,
-        assessed_at=datetime.now(timezone.utc).isoformat(),
+        assessed_at=datetime.now(UTC).isoformat(),
         note=note,
     )
 

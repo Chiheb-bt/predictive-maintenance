@@ -94,7 +94,7 @@ class TestSchemaConstants:
             assert feat in FIELD_RANGES, f"Missing range for {feat}"
 
     def test_input_aliases_map_to_canonical_names(self):
-        for alias, canonical in INPUT_ALIASES.items():
+        for _alias, canonical in INPUT_ALIASES.items():
             assert canonical in NUMERIC_FEATURES, f"{canonical} not in NUMERIC_FEATURES"
 
     def test_valid_types_set(self):

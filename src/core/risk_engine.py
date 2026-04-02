@@ -1,8 +1,10 @@
 """
 Risk classification, recommendations, and explainability.
 
-No ML dependencies, no I/O. Everything here is plain Python so it can be
-unit-tested cheaply and reused by any layer without dragging in sklearn.
+This module contains the "Expert System" rules that translate raw ML probabilities
+into actionable business logic. It is intentionally decoupled from sklearn/pandas
+to ensure it can be used in low-latency environments or specialized edge deployments
+without heavy dependencies.
 """
 
 from __future__ import annotations
@@ -55,11 +57,12 @@ _BASE_RECOMMENDATIONS: dict[RiskLevel, list[str]] = {
         "Notify the maintenance supervisor.",
     ],
     "CRITICAL": [
-        "Consider halting this machine for immediate inspection.",
-        "Notify the on-call maintenance engineer now.",
-        "Document current sensor values before any shutdown.",
-        "Do not restart without a full safety inspection and sign-off.",
-        "Check adjacent machines on the same power circuit.",
+        "IMMEDIATE ACTION: Halt this machine now to prevent catastrophic failure.",
+        "Dispatch the on-call maintenance engineer for an emergency teardown.",
+        "Verify emergency stop (E-stop) functionality and isolate power if necessary.",
+        "Document current sensor values for a post-mortem root cause analysis (RCA).",
+        "Inspect high-wear components (bearings, spindles) for thermal damage.",
+        "Do not restart until a Safety & Quality sign-off is completed.",
     ],
 }
 
@@ -115,7 +118,7 @@ def top_factors(
     """
     total = sum(feature_importances) or 1.0
     ranked = sorted(
-        zip(feature_names, feature_importances),
+        zip(feature_names, feature_importances, strict=False),
         key=lambda pair: pair[1],
         reverse=True,
     )

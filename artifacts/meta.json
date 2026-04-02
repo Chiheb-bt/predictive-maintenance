@@ -1,0 +1,97 @@
+{
+  "model_type": "RandomForest (calibrated, isotonic)",
+  "feature_columns": [
+    "Air temperature [K]",
+    "Process temperature [K]",
+    "Rotational speed [rpm]",
+    "Torque [Nm]",
+    "Tool wear [min]",
+    "Type"
+  ],
+  "best_params": {
+    "n_estimators": 200,
+    "max_depth": 10,
+    "min_samples_split": 5
+  },
+  "threshold": 0.5683,
+  "metrics": {
+    "f1": 0.0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "roc_auc": 0.8626,
+    "threshold": 0.5683,
+    "naive_baseline_f1": 0.0
+  },
+  "feature_importance": [
+    {
+      "feature": "Tool Wear",
+      "importance": 0.4726
+    },
+    {
+      "feature": "Torque",
+      "importance": 0.2084
+    },
+    {
+      "feature": "Air Temperature",
+      "importance": 0.1052
+    },
+    {
+      "feature": "Process Temperature",
+      "importance": 0.097
+    },
+    {
+      "feature": "Rotational Speed",
+      "importance": 0.0869
+    },
+    {
+      "feature": "Machine Type (Medium)",
+      "importance": 0.0166
+    },
+    {
+      "feature": "Machine Type (Low)",
+      "importance": 0.0134
+    }
+  ],
+  "training_stats": {
+    "Air temperature [K]": {
+      "mean": 300.0257,
+      "std": 1.9035,
+      "min": 295.4,
+      "max": 305.0,
+      "p25": 298.8,
+      "p75": 301.2
+    },
+    "Process temperature [K]": {
+      "mean": 309.9793,
+      "std": 2.145,
+      "min": 305.0,
+      "max": 315.0,
+      "p25": 308.575,
+      "p75": 311.225
+    },
+    "Rotational speed [rpm]": {
+      "mean": 2000.6833,
+      "std": 503.8228,
+      "min": 1168.0,
+      "max": 2883.0,
+      "p25": 1550.75,
+      "p75": 2454.5
+    },
+    "Torque [Nm]": {
+      "mean": 39.1337,
+      "std": 10.5041,
+      "min": 10.4,
+      "max": 67.1,
+      "p25": 32.4,
+      "p75": 45.85
+    },
+    "Tool wear [min]": {
+      "mean": 129.2033,
+      "std": 71.2548,
+      "min": 1.0,
+      "max": 252.0,
+      "p25": 63.75,
+      "p75": 185.0
+    }
+  }
+}

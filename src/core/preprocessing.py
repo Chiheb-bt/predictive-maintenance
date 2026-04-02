@@ -1,9 +1,10 @@
 """
 Feature schema and preprocessing pipeline for the Predictive Maintenance system.
 
-Keeping the ColumnTransformer here (rather than inline in train.py) means training
-and serving are always using the same transformations — no chance of skew creeping in
-between a notebook experiment and the production API.
+This module acts as the "Source of Truth" for the model's input expectations.
+By decoupling the ColumnTransformer from the training script, we ensure that
+inference always uses the exact same scaling and encoding parameters that were
+learned during training, eliminating training-serving skew.
 """
 
 from __future__ import annotations

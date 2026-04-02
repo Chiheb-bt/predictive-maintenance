@@ -26,7 +26,7 @@ import logging
 import shutil
 import sys
 from pathlib import Path
-from urllib.request import urlopen, urlretrieve
+from urllib.request import urlretrieve
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 log = logging.getLogger(__name__)
