@@ -649,7 +649,7 @@ def _build_gradio_ui() -> gr.Blocks:
     """
 
     with gr.Blocks(theme=gr.themes.Soft(), css=custom_css, title="Sentinel Command Center") as demo:
-        with gr.Div(elem_classes="header-center"):
+        with gr.Column(elem_classes="header-center"):
             gr.Markdown(
                 "<div class='logo-font'>SENTINEL <span style='color:#3b82f6'>v10.0</span></div>"
                 "<p style='color:#6b7280; font-size:1.1rem;'>Industrial Intelligence Command Center • Real-time Predictive Maintenance</p>"
@@ -659,7 +659,7 @@ def _build_gradio_ui() -> gr.Blocks:
             # LEFT: TELEMETRY CONTROL
             with gr.Column(scale=1):
                 gr.Markdown("### 🎛️ TELEMETRY CONTROL")
-                with gr.Div(elem_classes="risk-card"):
+                with gr.Column(elem_classes="risk-card"):
                     m_type    = gr.Dropdown(choices=["L", "M", "H"], value="M", label="Machine Type")
                     air_t     = gr.Slider(290, 310, 298, label="Air Temp [K]")
                     proc_t    = gr.Slider(300, 320, 308, label="Process Temp [K]")
@@ -675,7 +675,7 @@ def _build_gradio_ui() -> gr.Blocks:
                     gauge_out = gr.Plot(label="Risk Assessment")
                     factors_out = gr.Plot(label="Signal Analysis")
                 
-                with gr.Div(elem_classes="risk-card"):
+                with gr.Column(elem_classes="risk-card"):
                     recs_out = gr.Markdown("### 🛠️ RECOMMENDATIONS\n*Awaiting telemetry...*")
 
         with gr.Row():
