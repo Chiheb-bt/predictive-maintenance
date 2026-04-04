@@ -1,6 +1,0 @@
-src\serving\inference.py:140: error: Incompatible types in assignment (expression has type "str", target has type "float")  [assignment]
-src\serving\inference.py:221: error: Unused "type: ignore" comment  [unused-ignore]
-src\serving\inference.py:221: error: "object" has no attribute "predict_proba"  [attr-defined]
-src\serving\inference.py:221: note: Error code "attr-defined" not covered by "type: ignore" comment
-src\models\train.py:170: error: Argument 1 to "best_threshold" has incompatible type "ndarray[tuple[int], dtype[Any]] | ExtensionArray"; expected "ndarray[tuple[Any, ...], dtype[Any]]"  [arg-type]
-Found 4 errors in 2 files (checked 10 source files)

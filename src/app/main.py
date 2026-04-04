@@ -17,6 +17,7 @@ import json
 import os
 import secrets
 import time
+from collections import Counter as _Counter
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -318,7 +319,7 @@ def health() -> dict:  # type: ignore[type-arg]
     return {
         "status":       "ok" if ready else "degraded",
         "service":      "Predictive Maintenance API",
-        "version":      "2.2.0",
+        "version":      "10.0.0",
         "model":        str(model_path.name) if model_path else None,
         "model_loaded": ready,
         "model_error":  get_load_error(),
@@ -648,7 +649,7 @@ def _build_gradio_ui() -> gr.Blocks:
     .logo-font { font-size: 2.5rem; font-weight: 800; color: #111827; letter-spacing: -0.025em; }
     """
 
-    with gr.Blocks(theme=gr.themes.Soft(), css=custom_css, title="Sentinel Command Center") as demo:
+    with gr.Blocks(title="Sentinel Command Center") as demo:
         with gr.Column(elem_classes="header-center"):
             gr.Markdown(
                 "<div class='logo-font'>SENTINEL <span style='color:#3b82f6'>v10.0</span></div>"
@@ -698,6 +699,8 @@ def _build_gradio_ui() -> gr.Blocks:
         # Load initial history
         demo.load(fn=_get_history_table, outputs=history_out)
 
+    demo._css = custom_css
+    demo._theme = gr.themes.Soft()
     return demo
 
 

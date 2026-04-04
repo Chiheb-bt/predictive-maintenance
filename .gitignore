@@ -45,3 +45,19 @@ htmlcov/
 
 # Ruff cache
 .ruff_cache/
+
+model.pkl
+sentinel.db
+*.db
+mypy_*.txt
+ruff_*.txt
+pytest_*.txt
+out.txt
+cov.txt
+server_output.txt
+__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+src/*.egg-info/
